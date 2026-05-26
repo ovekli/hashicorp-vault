@@ -16,3 +16,27 @@ Token (will be hidden):
 
 # List secrets
 vault secrets list
+
+# vault auth create one
+vault auth enable userpass
+
+# List auth
+vault auth list
+
+# Create policy
+vault policy write developer-vault-policy - << EOF
+path "dev-secrets/+/creds" {
+   capabilities = ["create", "list", "read", "update"]
+}
+EOF
+
+# Create user
+vault write /auth/userpass/users/danielle-vault-user \
+    password='Flyaway Cavalier Primary Depose' \
+    policies=developer-vault-policy
+
+# Create key/value secret
+vault secrets enable -path=dev-secrets -version=2 kv
+
+# Try login
+vault login -method=userpass username=danielle-vault-user
