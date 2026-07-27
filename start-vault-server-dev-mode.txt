@@ -20,7 +20,7 @@ vault secrets list
 # Create a token
 vault token create --policy="default" --period=1h
 
-# Lookup toekn
+# Lookup token
 vault token lookup -accessor <accessor-id>
 
 # vault auth userpass create one
@@ -31,7 +31,7 @@ vault auth list
 
 # Create policy
 vault policy write developer-vault-policy - << EOF
-path "dev-secrets/+/creds" {
+path "dev-secrets/+/creds*" {
    capabilities = ["create", "list", "read", "update"]
 }
 EOF
@@ -41,8 +41,26 @@ vault write /auth/userpass/users/danielle-vault-user \
     password='Flyaway Cavalier Primary Depose' \
     policies=developer-vault-policy
 
-# Create key/value secret
+# Skapa en egen key/value (kv) secret
 vault secrets enable -path=dev-secrets -version=2 kv
 
-# Try login
+# Try login example 1
 vault login -method=userpass username=danielle-vault-user
+
+# Try login example 2
+vault login \
+    -no-print \
+    -method=userpass \
+    username=danielle-vault-user \
+    password='Flyaway Cavalier Primary Depose'
+
+# Lägg till en kv secret
+vault kv put /dev-secrets/creds api-key=E6BED968-0FE3-411E-9B9B-C45812E4737A
+
+# Fler tester på att lägga till kv secret
+vault kv put /dev-secrets/creds-test api-token=xxxx crypto-token=yyyy
+
+# Adderar en ny kv secret utan att ta bort befintliga
+vault kv patch /dev-secrets/creds-test key-token=BBBB
+
+
