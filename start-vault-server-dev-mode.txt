@@ -17,10 +17,16 @@ Token (will be hidden):
 # List secrets
 vault secrets list
 
-# vault auth create one
+# Create a token
+vault token create --policy="default" --period=1h
+
+# Lookup toekn
+vault token lookup -accessor <accessor-id>
+
+# vault auth userpass create one
 vault auth enable userpass
 
-# List auth
+# List all auth types (token, userpass...)
 vault auth list
 
 # Create policy
