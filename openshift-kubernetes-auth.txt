@@ -1,0 +1,264 @@
+# Enable /internal secret KV type
+vault secrets enable -path=internal kv-v2
+
+# Add an entry kv secret internal
+vault kv put internal/database/config username="db-readonly-username" password="db-secret-password"
+
+# List all secrets
+vault secrets list
+
+# List kv entries in path internal
+vault kv list internal
+
+# Get a specific kv entry (metadata/data)
+vault kv get internal/database/config
+
+# Add kubernetes authentication method
+vault auth enable kubernetes
+
+# Set address to the vault pod to parameter kubernetes_host
+vault write auth/kubernetes/config \
+      kubernetes_host="https://$KUBERNETES_PORT_443_TCP_ADDR:443"
+
+# List authentications
+vault auth list
+
+# Verify kubernetes auth method
+vault read auth/kubernetes/config
+
+# Add read policy to secret /internal/data/database/config
+vault policy write internal-app - <<EOF
+path "internal/data/database/config" {
+   capabilities = ["read"]
+}
+EOF
+
+# List policys
+vault policy list
+
+# Read policy internal-app
+vault policy read internal-app
+
+# Create kubernetes auth role named internal-app
+vault write auth/kubernetes/role/internal-app \
+      bound_service_account_names=internal-app \
+      bound_service_account_namespaces=default \
+      policies=internal-app \
+      ttl=24h
+
+# List auth/kubernetes/roles
+vault list auth/kubernetes/role
+
+# Get role internal-app
+vault read auth/kubernetes/role/internal-app
+
+# Create a service account in openshift project
+oc create sa internal-app
+
+# Create deployment object orgchart i project default
+oc apply -f deployment-orgchart.yaml
+
+# Check if secrets exists in directory /vault/secrets (Answer should be No)
+oc rsh orgchart-pod
+
+# Patch deployment and inject secrets into the pod
+cat << EOF >> cat patch-inject-secrets.yaml
+spec:
+   template:
+      metadata:
+      annotations:
+         vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+         vault.hashicorp.com/agent-inject: 'true'
+         vault.hashicorp.com/role: 'internal-app'
+         vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+EOF
+
+oc patch deployment orgchart --patch "$(cat patch-inject-secrets.yaml)"
+
+# Check pod status (Should be two containers)
+oc get pods
+
+# Check if secrets exists in directory /vault/secrets (Answer should be Yes)
+oc rsh orgchart-pod
+/app # cat /vault/secrets/database-config.txt
+data: map[password:db-secret-password username:db-readonly-username]
+metadata: map[created_time:2026-07-29T17:13:09.58191351Z custom_metadata:<nil> deletion_time: destroyed:false version:1]
+
+# Apply a template to inject secrets
+cat << EOF >> cat patch-inject-secrets-as-template.yaml
+spec:
+   template:
+      metadata:
+      annotations:
+         vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+         vault.hashicorp.com/agent-inject: 'true'
+         vault.hashicorp.com/agent-inject-status: 'update'
+         vault.hashicorp.com/role: 'internal-app'
+         vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+         vault.hashicorp.com/agent-inject-template-database-config.txt: |
+            {{- with secret "internal/data/database/config" -}}
+            postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+            {{- end -}}
+EOF
+
+oc patch deployment orgchart --patch "$(cat patch-inject-secrets-as-template.yaml)"
+
+# Pod with annotations
+cat << EOF >> cat pod-payroll.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+name: payroll
+labels:
+   app: payroll
+annotations:
+   vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+   vault.hashicorp.com/agent-inject: 'true'
+   vault.hashicorp.com/role: 'internal-app'
+   vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+   vault.hashicorp.com/agent-inject-template-database-config.txt: |
+      {{- with secret "internal/data/database/config" -}}
+      postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+      {{- end -}}
+spec:
+serviceAccountName: internal-app
+containers:
+   - name: payroll
+      image: jweissig/app:0.0.1
+EOF
+
+oc apply --filename pod-payroll.yaml
+
+# Run a deployment with a sa account that doesn't exist (Should not be authorized)
+cat << EOF >> cat deployment-website.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+name: website
+labels:
+   app: website
+spec:
+selector:
+   matchLabels:
+      app: website
+replicas: 1
+template:
+   metadata:
+      annotations:
+      vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+      vault.hashicorp.com/agent-inject: 'true'
+      vault.hashicorp.com/role: 'internal-app'
+      vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+      vault.hashicorp.com/agent-inject-template-database-config.txt: |
+         {{- with secret "internal/data/database/config" -}}
+         postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+         {{- end -}}
+      labels:
+      app: website
+   spec:
+      # This service account does not have permission to request the secrets.
+      serviceAccountName: website
+      containers:
+      - name: website
+         image: jweissig/app:0.0.1
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+name: website
+
+oc logs -f -c vault-agent-init website-69875b64cc-fpp5l
+# Output
+2026-07-29T18:27:43.784Z [INFO]  agent.auth.handler: authenticating
+2026-07-29T18:27:43.788Z [ERROR] agent.auth.handler: error authenticating:
+  error=
+  | Error making API request.
+  |
+  | URL: PUT http://vault.default.svc:8200/v1/auth/kubernetes/login
+  | Code: 403. Errors:
+  |
+  | * service account name not authorized
+   backoff=28.93s
+
+# Run a deployment in a different namespace (Should not be allowed)
+oc create namespace offsite
+oc create sa internal-app
+cat << EOF >> cat deployment-issues.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+name: issues
+labels:
+   app: issues
+spec:
+selector:
+   matchLabels:
+      app: issues
+replicas: 1
+template:
+   metadata:
+      annotations:
+      vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+      vault.hashicorp.com/agent-inject: 'true'
+      vault.hashicorp.com/role: 'internal-app'
+      vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+      vault.hashicorp.com/agent-inject-template-database-config.txt: |
+         {{- with secret "internal/data/database/config" -}}
+         postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+         {{- end -}}
+      labels:
+      app: issues
+   spec:
+      serviceAccountName: internal-app
+      containers:
+      - name: issues
+         image: jweissig/app:0.0.1
+EOF
+
+oc apply -f deployment-issues.yaml
+
+oc logs -f -c vault-agent-init issues-55b88cb95c-pv9fl
+# Output:
+2026-07-29T18:38:57.116Z [INFO]  agent.auth.handler: authenticating
+2026-07-29T18:38:57.125Z [ERROR] agent.auth.handler: error authenticating:
+  error=
+  | Error making API request.
+  |
+  | URL: PUT http://vault.default.svc:8200/v1/auth/kubernetes/login
+  | Code: 403. Errors:
+  |
+  | * namespace not authorized
+   backoff=2m9.2s
+
+# Solution - create a new role offsite-app: 
+oc project default
+oc rsh vault-o
+
+# Add role offite-app
+vault write auth/kubernetes/role/offsite-app \
+   bound_service_account_names=internal-app \
+   bound_service_account_namespaces=offsite \
+   policies=internal-app \
+   ttl=24h
+
+# check role offsite-app
+vault read auth/kubernetes/role/offsite-app
+
+# Patch deployment object
+cat << EOF >> patch-issues.yaml
+spec:
+template:
+   metadata:
+      annotations:
+      vault.hashicorp.com/agent-inject: 'true'
+      vault.hashicorp.com/agent-inject-status: 'update'
+      vault.hashicorp.com/role: 'offsite-app'
+      vault.hashicorp.com/agent-inject-secret-database-config.txt: 'internal/data/database/config'
+      vault.hashicorp.com/agent-inject-template-database-config.txt: |
+         {{- with secret "internal/data/database/config" -}}
+         postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+         {{- end -}}
+EOF
+
+# Run patch
+patch deployment issues --patch "$(cat patch-issues.yaml)"
