@@ -1,0 +1,42 @@
+# Create keystore
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365
+
+# Create truststore
+keytool -import -trustcacerts -file cert.pem -alias klingotrust -keystore klingotrust.jks
+
+# Install vault on macos 
+brew tap hashicorp/tap
+brew install hashicorp/tap/vault
+
+# Create route object in openshift
+oc create route edge vault --service vault --insecure-skip-tls-verify
+
+# Setup envvar VAULT_ADDR
+export VAULT_ADDR=https://vault-vault.apps.crc.testing
+
+# Get minishift ingress cert with openssl s_client command and store them into a file
+
+# Setup envvar VAULT_CACERT with path to minishift cert
+export VAULT_CACERT=/Users/ovekli/ssl/minishift-ca.pem
+
+# Test connection 
+vault status
+
+# Login into vault server (Add token name)
+vault login
+output:
+Token (will be hidden):
+
+# Create new secret - kv type - path truststores v2
+vault secrets enable -path=truststores -version=2 kv
+
+# Add truststore to secret truststores
+cat klingotrust.jks | base64 |vault kv put truststores/klingotrust klingotrust=-
+
+# Try to download keystore file
+vault kv get -field klingotrust truststores/klingotrust | base64 -d > vault-klingotrust.jks
+
+# Try to list entries in trust vault-klingotrust.jks file
+keytool -list -keystore vault-klingotrust.jks
+
+### Next create pod who can login by kubernetes authentication module and download the keystore file ###
