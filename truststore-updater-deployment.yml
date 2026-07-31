@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
       - args:
-        - 'export VAULT_TOKEN=$(vault login -method=userpass -token-only username=update-truststore-user password="Get my truststores");
+        - 'export VAULT_TOKEN=$(sh /vault/secrets/vault-login.sh);
            while (true); do 
              vault kv get -field klingotrust truststores/klingotrust | base64 -d > /tmp/klingotrust.jks;
              vault kv get -field oveklitrust truststores/klingotrust | base64 -d > /tmp/oveklitrust.jks;

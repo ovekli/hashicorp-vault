@@ -69,13 +69,57 @@ path "truststores/+/klingotrust" {
 }
 EOF
 
+
+### CREATE SECRET FOR VAULT USERNAME/PASSWORD ###
+
+# create kv secret
+vault secrets enable -path=secrets kv-v2
+
+# Create kv entry username/password to vault
+vault kv put secrets/truststore-updater/config username=update-truststore-user password='Get my truststores'
+
+# Enable kubernetes auth
+vault auth enable kubernetes
+vault write auth/kubernetes/config kubernetes_host="https://1043.0.1:443"
+
+# Add read policy to secret secrets/data/truststore-updater/config
+vault policy write truststore-sa - <<EOF
+path "secrets/data/truststore-updater/config" {
+   capabilities = ["read"]
+}
+EOF
+
+# Create kubernetes auth role named truststore-sa
+vault write auth/kubernetes/role/truststore-sa \
+      bound_service_account_names=truststore-sa \
+      bound_service_account_namespaces=keystore-site \
+      policies=truststore-sa \
+      ttl=24h
+
+# Create patch to inject secrets
+oc patch deployment truststore-updater --patch "$(cat <<EOF
+spec:
+   template:
+      metadata:
+        annotations:
+           vault.hashicorp.com/agent-image: docker.io/hashicorp/vault
+           vault.hashicorp.com/agent-inject: 'true'
+           vault.hashicorp.com/role: 'truststore-sa'
+           vault.hashicorp.com/agent-inject-template-vault-login.sh: |
+             {{- with secret "secrets/data/truststore-updater/config" -}}
+             vault login -method=userpass -token-only username={{ .Data.data.username }} password="{{ .Data.data.password }}"
+             {{- end -}}
+EOF
+)"
+
+
 ### SETUP TRUSTSTORE-UPDATER SERVICE ###
 
-# Download oc client
-https://mirror.openshift.com/pub/openshift-v4/clients/oc-dec2/4.6/linux/oc.tar.gz
+# Download oc client and extract tar package.
+https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.21.3/openshift-client-linux-arm64.tar.gz
 
 # Build image
-docker build -t ovekli/vault-kubernetes-client:1.0.0 -f oc-vault-client.dockerfile
+docker build -t ovekli/vault-kubernetes-client:1.0.0 -f oc-vault-client.dockerfile .
 
 # Create deployment config
 oc create namespace keystore-site
