@@ -1,86 +1,10 @@
-# Create keystore
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365
 
-# Create truststore
-keytool -import -trustcacerts -file cert.pem -alias klingotrust -keystore klingotrust.jks
-
-# Install vault on macos (For client use)
-brew tap hashicorp/tap
-brew install hashicorp/tap/vault
+### SETUP HASHICORP VAULT SERVICE- PRODUCTION MODE ###
 
 # On openshift install vault
-git clone https://github.com/hashicorp-education/learn-vault-redhat-openshift
-cd learn-vault-redhat-openshift
-#oc create namespace vault
-helm repo add hashicorp https://helm.releases.hashicorp.com
-helm repo update
-helm install vault hashicorp/vault \
-    --create-namespace \
-    --namespace vault \
-    --set "global.openshift=true" \
-    --set "server.dev.enabled=true" \
-    --set "server.image.repository=docker.io/hashicorp/vault" \
-    --set "injector.image.repository=docker.io/hashicorp/vault-k8s"
+See file openshift-vault-production-mode.txt
 
-# Switch from den (in-memory-storage, dev-mode to file-storage, production-mode)
-oc create -f - << EOF
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vault
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-EOF
-
-# Create configmap
-oc create -f - << EOF
-apiVersion: v1
-data:
-  config.hcl: "ui\t\t\t= true\ndefault_lease_ttl\t= \"168h\"\nmax_lease_ttl\t\t= \"720h\"\ndisable_mlock\t\t=
-    true\n\nlistener \"tcp\" {\n  address = \"0.0.0.0:8200\"\n  tls_disable = true\n}\n\napi_addr
-    = \"http://127.0.0.1:8200\"\n\nstorage \"file\" {\n  path = \"/var/lib/vault/data\"\n}\n"
-kind: ConfigMap
-metadata:
-  name: vault
-EOF
-
-# Mount volumes to statefulsets
-oc set volumes -c vault statefulset vault --add --type pvc --name vault --claim-name vault --mount-path /var/lib/vault
-
-# Mount configmap to containers homedir
-oc set volumes -c vault statefulset vault --add --type configmap --name vault-cm --configmap-name vault --mount-path /home/vault/config
-
-# Switch to production mode
-oc patch statefulset vault --patch "$(cat <<EOF
-spec:
-  template:
-    spec:
-      containers:
-        - args:
-          - "/usr/local/bin/docker-entrypoint.sh vault server -config /home/vault/config/config.hcl \n"
-          name: vault 
-EOF
-)"
-
-# Delete existing vault-0 pod
-# Check that the new pod is going up normal
-
-# Initializing vault
-oc rsh -c vault vault-0 /bin/sh -c 'vault operator init'
-
-# Be sure to save Unseal keys and Initial root token in a safe way
-
-# Time to unseal vault
-oc rsh -c vault vault-0 /bin/sh -c 'vault operator unseal <Unseal Key 1>'
-oc rsh -c vault vault-0 /bin/sh -c 'vault operator unseal <Unseal Key 2>'
-oc rsh -c vault vault-0 /bin/sh -c 'vault operator unseal <Unseal Key 3>'
-
-# Create route object in openshift
-oc create route edge vault --service vault --insecure-skip-tls-verify
+### ON MACOS CONFIGURE OPENSHIFT VAULT SERVICE ###
 
 # Setup envvar VAULT_ADDR
 export VAULT_ADDR=https://vault-vault.apps.crc.testing
@@ -89,6 +13,17 @@ export VAULT_ADDR=https://vault-vault.apps.crc.testing
 
 # Setup envvar VAULT_CACERT with path to minishift cert
 export VAULT_CACERT=/Users/ovekli/ssl/minishift-ca.pem
+
+# Create certificate
+cd $HOME/work-projects/vault-store-certificates
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365
+
+# Create truststore
+keytool -import -trustcacerts -file cert.pem -alias klingotrust -keystore klingotrust.jks
+
+# Install vault on macos (For client use)
+brew tap hashicorp/tap
+brew install hashicorp/tap/vault
 
 # Test connection 
 vault status
@@ -102,7 +37,8 @@ Token (will be hidden):
 vault secrets enable -path=truststores -version=2 kv
 
 # Add truststore to secret truststores
-cat klingotrust.jks | base64 |vault kv put truststores/klingotrust klingotrust=-
+cat klingotrust.jks | base64 |vault kv patch truststores/klingotrust klingotrust=-
+cat klingotrust.jks | base64 |vault kv patch truststores/klingotrust oveklitrust=-
 
 # Try to download keystore file
 vault kv get -field klingotrust truststores/klingotrust | base64 -d > vault-klingotrust.jks
@@ -110,4 +46,39 @@ vault kv get -field klingotrust truststores/klingotrust | base64 -d > vault-klin
 # Try to list entries in trust vault-klingotrust.jks file
 keytool -list -keystore vault-klingotrust.jks
 
-### Next create pod who can login by kubernetes authentication module and download the keystore file ###
+### Next create pod who can login with userpass module and download the keystore file ###
+
+# vault auth userpass create one
+vault auth enable userpass
+
+# Create user
+vault write /auth/userpass/users/update-truststore-user \
+    password='Get my truststores' \
+    policies=truststores-policy
+
+# List authentications
+vault auth list
+
+# Verify kubernetes auth method
+vault read /auth/userpass/users/update-truststore-user
+
+# Add read policy to secret truststores/klingotrust
+vault policy write truststores-policy - <<EOF
+path "truststores/+/klingotrust" {
+   capabilities = ["read"]
+}
+EOF
+
+### SETUP TRUSTSTORE-UPDATER SERVICE ###
+
+# Download oc client
+https://mirror.openshift.com/pub/openshift-v4/clients/oc-dec2/4.6/linux/oc.tar.gz
+
+# Build image
+docker build -t ovekli/vault-kubernetes-client:1.0.0 -f oc-vault-client.dockerfile
+
+# Create deployment config
+oc create namespace keystore-site
+oc create sa truststore-sa
+oc adm policy add-role-to-user edit -z truststore-sa
+oc create -f truststore-updater-deployment.yml
