@@ -1,11 +1,19 @@
-apiVersion: apps/v1
+piVersion: apps/v1
 kind: StatefulSet
 metadata:
+  annotations:
+    meta.helm.sh/release-name: vault-transit
+    meta.helm.sh/release-namespace: vault-transit
+  creationTimestamp: "2026-08-01T18:51:07Z"
+  generation: 21
   labels:
-    app.kubernetes.io/instance: vault
+    app.kubernetes.io/instance: vault-transit
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: vault
-  name: vault
+  name: vault-transit
+  namespace: vault-transit
+  resourceVersion: "50853"
+  uid: 663da48e-5d4d-4f2a-9580-be328bb96f60
 spec:
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Retain
@@ -15,22 +23,29 @@ spec:
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app.kubernetes.io/instance: vault
+      app.kubernetes.io/instance: vault-transit
       app.kubernetes.io/name: vault
       component: server
-  serviceName: vault-internal
+  serviceName: vault-transit-internal
   template:
     metadata:
       labels:
-        app.kubernetes.io/instance: vault
+        app.kubernetes.io/instance: vault-transit
         app.kubernetes.io/name: vault
         component: server
         helm.sh/chart: vault-0.34.0
     spec:
       containers:
       - args:
-        - "/usr/local/bin/docker-entrypoint.sh vault server -config /home/vault/config/config.hcl
-          \n"
+        - 'vault server -config /home/vault/config/config.hcl & 
+           if [ -d /var/lib/vault/data ]; then 
+            vault operator unseal unseal-key1; 
+            vault operator unseal unseal-key2;
+            vault operator unseal unseal-key3;
+           fi;   
+           while(true); do 
+            sleep 3600; 
+           done'
         command:
         - /bin/sh
         - -ec
@@ -69,11 +84,9 @@ spec:
               apiVersion: v1
               fieldPath: metadata.name
         - name: VAULT_CLUSTER_ADDR
-          value: https://$(HOSTNAME).vault-internal:8201
+          value: https://$(HOSTNAME).vault-transit-internal:8201
         - name: HOME
           value: /home/vault
-        - name: VAULT_DEV_ROOT_TOKEN_ID
-          value: root
         - name: VAULT_DEV_LISTEN_ADDRESS
           value: '[::]:8200'
         image: docker.io/hashicorp/vault:2.0.3
@@ -113,26 +126,26 @@ spec:
         volumeMounts:
         - mountPath: /home/vault
           name: home
-        - mountPath: /home/vault/config
-          name: vault-cm
         - mountPath: /var/lib/vault
-          name: vault
+          name: vault-transit
+        - mountPath: /home/vault/config
+          name: vault-transit-cm
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext: {}
-      serviceAccount: vault
-      serviceAccountName: vault
+      serviceAccount: vault-transit
+      serviceAccountName: vault-transit
       terminationGracePeriodSeconds: 10
       volumes:
       - emptyDir: {}
         name: home
+      - name: vault-transit
+        persistentVolumeClaim:
+          claimName: vault-transit
       - configMap:
           defaultMode: 420
-          name: vault
-        name: vault-cm
-      - name: vault
-        persistentVolumeClaim:
-          claimName: vault
+          name: vault-transit
+        name: vault-transit-cm
   updateStrategy:
     type: OnDelete

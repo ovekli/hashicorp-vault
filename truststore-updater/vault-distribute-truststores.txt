@@ -2,7 +2,9 @@
 ### SETUP HASHICORP VAULT SERVICE- PRODUCTION MODE ###
 
 # On openshift install vault
-See file openshift-vault-production-mode.txt
+# See files
+#  - install-transit-vault.txt
+#  - openshift-vault-production-mode.txt
 
 ### ON MACOS CONFIGURE OPENSHIFT VAULT SERVICE ###
 
@@ -28,7 +30,10 @@ brew install hashicorp/tap/vault
 # Test connection 
 vault status
 
-# Login into vault server (Add token name)
+# ALT 1 - Set envvar VAULT_TOKEN to authenticate
+export VAULT_TOKEN=hvs.atkPu7DUZeroywFa1lDReVNA
+
+# ALT 2 - Login into vault server (Add token name)
 vault login
 output:
 Token (will be hidden):
@@ -37,7 +42,7 @@ Token (will be hidden):
 vault secrets enable -path=truststores -version=2 kv
 
 # Add truststore to secret truststores
-cat klingotrust.jks | base64 |vault kv patch truststores/klingotrust klingotrust=-
+cat klingotrust.jks | base64 |vault kv put truststores/klingotrust klingotrust=-
 cat klingotrust.jks | base64 |vault kv patch truststores/klingotrust oveklitrust=-
 
 # Try to download keystore file
@@ -80,7 +85,12 @@ vault kv put secrets/truststore-updater/config username=update-truststore-user p
 
 # Enable kubernetes auth
 vault auth enable kubernetes
-vault write auth/kubernetes/config kubernetes_host="https://1043.0.1:443"
+
+# Run remote shell to vault pod
+oc rsh vault-0
+vault write auth/kubernetes/config kubernetes_host="https://$KUBERNETES_PORT_443_TCP_ADDR:443"
+vault read auth/kubernetes/config
+exit
 
 # Add read policy to secret secrets/data/truststore-updater/config
 vault policy write truststore-sa - <<EOF

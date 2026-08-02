@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  generation: 21
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/name: {{ .Release.Name }}
+  name: {{ .Release.Name }}
+spec:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  podManagementPolicy: Parallel
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: {{ .Release.Name }}
+      component: server
+  serviceName: {{ .Release.Name }}-internal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/name: {{ .Release.Name }}
+        component: server
+    spec:
+      containers:
+      - args:
+        - 'vault server -config /home/vault/config/config-transit.hcl & 
+           if [ -d /var/lib/vault/data ]; then 
+            vault operator unseal "$UNSEAL_KEY_1"; 
+            vault operator unseal "$UNSEAL_KEY_2";
+            vault operator unseal "$UNSEAL_KEY_3";
+           fi;   
+           while(true); do 
+            sleep 3600; 
+           done'
+        command:
+        - /bin/sh
+        - -ec
+        env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: VAULT_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: VAULT_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: VAULT_ADDR
+          value: http://127.0.0.1:8200
+        - name: VAULT_API_ADDR
+          value: http://$(POD_IP):8200
+        - name: SKIP_CHOWN
+          value: "true"
+        - name: SKIP_SETCAP
+          value: "true"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: VAULT_CLUSTER_ADDR
+          value: https://$(HOSTNAME).{{ .Release.Name }}-internal:8201
+        - name: HOME
+          value: /home/vault
+        - name: VAULT_DEV_LISTEN_ADDRESS
+          value: '[::]:8200'
+        image: docker.io/hashicorp/vault:2.0.3
+        imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - sleep 5 && kill -SIGTERM $(pidof vault)
+        name: vault
+        ports:
+        - containerPort: 8200
+          name: http
+          protocol: TCP
+        - containerPort: 8201
+          name: https-internal
+          protocol: TCP
+        - containerPort: 8202
+          name: http-rep
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -ec
+            - vault status -tls-skip-verify
+          failureThreshold: 2
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /home/vault
+          name: home
+        - mountPath: /var/lib/vault
+          name: {{ .Release.Name }}
+        - mountPath: /home/vault/config
+          name: {{ .Release.Name }}-cm
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: vault-transit
+      serviceAccountName: vault-transit
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - emptyDir: {}
+        name: home
+      - name: {{ .Release.Name }}
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}
+      - configMap:
+          defaultMode: 420
+          name: {{ .Release.Name }}
+        name: {{ .Release.Name }}-cm
+  updateStrategy:
+    type: OnDelete

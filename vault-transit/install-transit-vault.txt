@@ -1,0 +1,153 @@
+# Create new openshift namespace
+oc create namespace vault-transit
+
+# Install vault-transit server with helm
+helm install vault-transit hashicorp/vault \
+    --set "global.openshift=true" \
+    --set "server.dev.enabled=true" \
+    --set "server.image.repository=docker.io/hashicorp/vault" \
+    --set "injector.image.repository=docker.io/hashicorp/vault-k8s"    
+
+# Switch from den (in-memory-storage, dev-mode to file-storage, production-mode)
+oc create -f - << EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-transit
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+# Create configmap
+oc create -f - << EOF
+apiVersion: v1
+data:
+  config.hcl: "ui\t\t\t= true\ndefault_lease_ttl\t= \"168h\"\nmax_lease_ttl\t\t= \"720h\"\ndisable_mlock\t\t=
+    true\n\nlistener \"tcp\" {\n  address = \"0.0.0.0:8200\"\n  tls_disable = true\n}\n\napi_addr
+    = \"http://127.0.0.1:8200\"\n\nstorage \"file\" {\n  path = \"/var/lib/vault/data\"\n}\n"
+kind: ConfigMap
+metadata:
+  name: vault-transit
+EOF   
+
+# Mount volumes to statefulsets
+oc set volumes -c vault statefulset vault-transit --add --type pvc --name vault-transit --claim-name vault-transit --mount-path /var/lib/vault
+
+# Mount configmap to containers homedir
+oc set volumes -c vault statefulset vault-transit --add --type configmap --name vault-transit-cm --configmap-name vault-transit --mount-path /home/vault/config
+
+# Startup pod and setup a remote shell to the container
+oc rsh vault-transit-0
+
+# In shell - initialize vault 
+vault operator init
+
+# Take care of the unsealed  keys and root token.
+Unseal Key 1: z4VXq6xeapP+QQLTPAiBRHSE1UOzJkmpea4fjB0KP0nW
+Unseal Key 2: GrYhxP4iDBXmtL5r5Vl6LiWPfgFvb69QfZefHRgL9DGY
+Unseal Key 3: b1BDYq54XGrtO2CCvpRBbuwwuqa5/IafSrex1OgKgPwJ
+Unseal Key 4: w0TPcrmwiEO0mIMleuoI9PIrqH9oYsyzDi+mNamxYunj
+Unseal Key 5: /b1zQWMuohyER61obBPLVHOH9Q0T90jcbQ5o5YXiFWCy
+
+Initial Root Token: hvs.WnYv0xfw3GodML37m03znFfP
+
+# Edit vault-transit statefulset object and add the three first unsealed keys as argument to command vault operator unseal Replace argument unseal-key1,2,3.
+
+# Delete pod to restart. Hopefully the result will be 'core: vault is unsealed'
+
+# Run remote shell to the vault-transit pod
+oc rsh vault-transit-0
+
+In the terminal run
+vault login <root-token>
+
+# Enter audit device
+vault audit enable file file_path=/tmp/audit.log
+
+# Enable transit secret enginge
+vault secrets enable transit
+
+# Create an encryption key named autounseal
+vault write -f transit/keys/autounseal
+
+# Create a policy for updates
+vault policy write autounseal -<<EOF
+path "transit/encrypt/autounseal" {
+   capabilities = [ "update" ]
+}
+
+path "transit/decrypt/autounseal" {
+   capabilities = [ "update" ]
+}
+EOF
+
+# Create a client token for autounseal operations
+vault token create -orphan -policy="autounseal" \
+   -wrap-ttl=120 -period=24h \
+   -field=wrapping_token > /tmp/wrapping-token.txt
+
+# List wrapped token
+ echo /tmp/wrapping-token.txt
+ hvs.CAESICW0YSw6djFXEa39jsm8oM8LFyUPsh651E5IZSFxHYUyGh4KHGh2cy5nS0xZV1BqSldPbmVlQ20ySFNyMkkyOXk  
+
+# Unwrap token
+vault unwrap -field=token $(cat /tmp/wrapping-token.txt)
+hvs.CAESID1qoSHhEysxdMCoWbyBNCIGBhukZg-HHiXgr8jyxxFuGh4KHGh2cy40c0xWU2tmdUkwWWZ4M2g2V0VrNlY5eUg
+
+# Edit vault server config-autounseal.hcl file
+seal "transit" {
+  address = "vault-transit.vault-transit.svc:8200"
+  disable_renewal = "false"
+  key_name = "autounseal"
+  mount_path = "transit/"
+  tls_skip_verify = "true"
+}
+
+# Modify vault server
+# shutdown pod
+# Delete vault pvc if it exists
+# Edit vault statefulset configuration 
+
+    spec:
+      containers:
+      - args:
+        - "export VAULT_TOKEN=\"hvs.CAESID1qoSHhEysxdMCoWbyBNCIGBhukZg-HHiXgr8jyxxFuGh4KHGh2cy40c0xWU2tmdUkwWWZ4M2g2V0VrNlY5eUg\";
+          /usr/local/bin/docker-entrypoint.sh vault server -config /home/vault/config/config-autounseal.hcl
+          \n"
+          
+# Startup pod
+# Initialize vault
+oc rsh -c vault vault-0 /bin/sh -c 'vault operator init'
+
+# Save recovery keys and root token. 
+
+Recovery Key 1: VvSJSTgF7RHaMOI48Bef9sMjTRXQaj85305zu473MGit
+Recovery Key 2: Ce7AdWiQweqgcwgmfwlpOcPU597NNQTlUKgB7C57As4J
+Recovery Key 3: TLk0WgCb3z0h+t1TBEyX4r3JJenTAXu9EVd2EqNZXrSi
+Recovery Key 4: if5TQ8ZdKl0i2VHoUpCt0m+gNmrHGEkx3eac2gRQEyPM
+Recovery Key 5: l4Rv3IW+cgjK+D9j/wWw/RkztIwNVQyKoSIJfk9o/pv5
+
+Initial Root Token: hvs.atkPu7DUZeroywFa1lDReVNA
+
+# Run command vault status
+# Output:
+/ $ vault status
+Key                      Value
+---                      -----
+Seal Type                transit
+Recovery Seal Type       shamir
+Initialized              true
+Sealed                   false
+Total Recovery Shares    5
+Threshold                3
+Version                  2.0.3
+Build Date               2026-06-17T12:39:45Z
+Storage Type             file
+Cluster Name             vault-cluster-e927db03
+Cluster ID               907a56b9-6cc2-e42e-0202-0545625c61af
+HA Enabled               false
+
