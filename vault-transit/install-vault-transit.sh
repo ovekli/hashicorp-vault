@@ -26,14 +26,13 @@ oc set env --from secret/vault-transit statefulset vault-transit
 echo "Restart vault-transit pod"
 oc delete pod vault-transit-0
 
-echo "Sleep for 45 sec..."
-sleep 45
+until [ "$(oc get pods --no-headers -l app.kubernetes.io/instance=vault-transit | awk '/Running/{print $2}')" = "1/1" ]; do echo "Waiting for pod to become available..."; sleep 15; done
 
 echo "Get root token"
 ROOT_TOKEN=$(cat -v vault-init-result.txt | awk -F: '/Root Token/{gsub(/\^\[\[0m\^M/,""); gsub(/ /,"");print $2}')
 
 echo "Enable transit secret, add secret autounseal and finally autounseal policy"
-set -x
+
 oc rsh vault-transit-0 /bin/sh -c "
    vault login $ROOT_TOKEN &&
    vault secrets enable transit &&
@@ -49,8 +48,10 @@ oc rsh vault-transit-0 /bin/sh -c "
 EOF
 "
 
-
 echo "Create a client token for autounseal operations"
-vault token create -orphan -policy="autounseal" \
-   -wrap-ttl=120 -period=24h \
-   -field=wrapping_token > wrapping-token.txt
+oc rsh vault-transit-0 /bin/sh -c "
+  vault login $ROOT_TOKEN > /dev/null &&
+  vault token create -orphan -policy="autounseal" \
+     -wrap-ttl=120 -period=24h \
+     -field=wrapping_token > /tmp/wrapping-token.txt &&
+  vault unwrap -field=token $(cat /tmp/wrapping-token.txt)" > unwrapped-token.txt
