@@ -50,8 +50,8 @@ EOF
 
 echo "Create a client token for autounseal operations"
 oc rsh vault-transit-0 /bin/sh -c "
-  vault login $ROOT_TOKEN > /dev/null &&
-  vault token create -orphan -policy="autounseal" \
+  vault login -no-print $ROOT_TOKEN &&
+  vault token create -orphan -policy='autounseal' \
      -wrap-ttl=120 -period=24h \
-     -field=wrapping_token > /tmp/wrapping-token.txt &&
-  vault unwrap -field=token $(cat /tmp/wrapping-token.txt)" > unwrapped-token.txt
+     -field=wrapping_token > /tmp/wrapped_token.txt &&
+  vault unwrap -field=token \$(cat /tmp/wrapped_token.txt)" > unwrapped-token.txt
