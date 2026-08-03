@@ -33,7 +33,7 @@ kind: Service
 metadata:
   labels:
     app: {{ .Release.Name }}-agent-injector-svc
-  name: {{ .Release.Name }}-injector-svc
+  name: {{ .Release.Name }}-agent-injector-svc
 spec:
   internalTrafficPolicy: Cluster
   ipFamilies:
@@ -45,7 +45,7 @@ spec:
     protocol: TCP
     targetPort: 8080
   selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}-agent-injector
     app.kubernetes.io/name: {{ .Release.Name }}-agent-injector
     component: webhook
   sessionAffinity: None
