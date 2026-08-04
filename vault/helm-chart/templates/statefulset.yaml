@@ -28,9 +28,7 @@ spec:
     spec:
       containers:
       - args:
-        - "export VAULT_TOKEN=\"$UNWRAPPED_TOKEN\";
-          /usr/local/bin/docker-entrypoint.sh vault server -config /home/vault/config/config-autounseal.hcl
-          \n"
+        - "/usr/local/bin/docker-entrypoint.sh vault server -config /home/vault/config/config-autounseal.hcl \n"
         command:
         - /bin/sh
         - -ec

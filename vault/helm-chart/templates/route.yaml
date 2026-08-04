@@ -1,0 +1,20 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: {{ .Release.Name }}
+    helm.sh/chart: vault-0.34.0
+  name: {{ .Release.Name }}
+spec:
+  host: {{ .Release.Name }}-{{ .Release.Namespace }}.apps.crc.testing
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+  to:
+    kind: Service
+    name: {{ .Release.Name }}
+    weight: 100
+  wildcardPolicy: None

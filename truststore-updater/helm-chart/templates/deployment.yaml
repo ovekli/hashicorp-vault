@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: {{ .Release.Name }}
+  name: {{ .Release.Name }}
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: truststore-updater
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+      - args:
+        - export VAULT_TOKEN=$(sh /vault/secrets/vault-login.sh); while (true); do
+          vault kv get -field klingotrust truststores/klingotrust | base64 -d > /tmp/klingotrust.jks;
+          vault kv get -field oveklitrust truststores/klingotrust | base64 -d > /tmp/oveklitrust.jks;
+          oc create cm app-jks --from-file /tmp/klingotrust.jks --from-file /tmp/oveklitrust.jks
+          -o yaml --dry-run=client | oc apply  -f -; sleep 600; done
+        command:
+        - /bin/sh
+        - -c
+        env:
+        - name: VAULT_ADDR
+          value: http://vault.vault-verify.svc:8200
+        image: docker.io/ovekli/vault-kubernetes-client:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: truststore-updater
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: truststore-sa
+      serviceAccountName: truststore-sa
+      terminationGracePeriodSeconds: 30
